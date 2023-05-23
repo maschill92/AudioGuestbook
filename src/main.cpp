@@ -46,6 +46,7 @@ enum Mode
 };
 Mode mode = Mode::Initialising;
 
+/* #region Recording */
 
 void startRecording()
 {
@@ -143,6 +144,8 @@ void stopRecording()
   setMode(Mode::Ready);
 }
 
+/* #endregion Recording */
+
 void setup()
 {
   Serial.begin(9600);
@@ -185,8 +188,6 @@ void loop()
   case Mode::Ready:
     if (buttonRecord.risingEdge())
     {
-      Serial.println("Begin recording!");
-      setMode(Mode::Recording);
       startRecording();
     }
     break;
