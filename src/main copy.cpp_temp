@@ -1,0 +1,49 @@
+#include <Audio.h>
+#include <Wire.h>
+#include <SPI.h>
+#include <SD.h>
+#include <SerialFlash.h>
+
+// GUItool: begin automatically generated code
+AudioInputI2S i2s1;     // xy=422,772
+AudioAnalyzePeak peak1; // xy=713,752
+AudioAnalyzePeak peak2; // xy=716,797
+AudioConnection patchCord1(i2s1, 0, peak1, 0);
+AudioConnection patchCord2(i2s1, 1, peak2, 0);
+AudioControlSGTL5000 sgtl5000_1; // xy=505,881
+// GUItool: end automatically generated code
+
+void setup()
+{
+  Serial.begin(9600);
+  AudioMemory(8);
+  sgtl5000_1.enable();
+  // sgtl5000_1.volume(0.5);
+  sgtl5000_1.inputSelect(AUDIO_INPUT_MIC);
+  sgtl5000_1.micGain(36);
+  delay(1000);
+  Serial.println("Begin");
+}
+
+// for best effect make your terminal/monitor a minimum of 31 chars wide and as high as you can.
+
+elapsedMillis fps;
+
+void loop()
+{
+
+  if (fps > 100)
+  {
+    if (peak1.available())
+    {
+      fps = 0;
+      int monoPeak = peak1.read() * 30.0;
+      Serial.print("|");
+      for (int cnt = 0; cnt < monoPeak; cnt++)
+      {
+        Serial.print(">");
+      }
+      Serial.println();
+    }
+  }
+}
