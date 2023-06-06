@@ -6,27 +6,28 @@
 #include <SD.h>
 #include <TimeLib.h>
 
-// // GUItool: begin automatically generated code
-AudioInputI2S micIn;             // xy=175.3333282470703,458.3333282470703
-AudioSynthWaveform beepWaveform; // xy=205.3333282470703,159.3333282470703
-AudioPlaySdRaw playSdRaw;        // xy=220.3333282470703,198.3333282470703
-AudioMixer4 audioMixer;          // xy=376.3333282470703,174.3333282470703
-AudioAnalyzePeak peakAnalyzer;   // xy=466.3333435058594,501.33334255218506
-AudioRecordQueue recordQueue;    // xy=470.3333282470703,461.3333282470703
-AudioOutputI2S audioOutput;      // xy=524.3333282470703,174.3333282470703
+// GUItool: begin automatically generated code
+AudioInputI2S micIn;             // xy=452,452
+AudioPlaySdWav playSdWav;        // xy=605,632
+AudioSynthWaveform beepWaveform; // xy=611,590
+AudioMixer4 audioMixer;          // xy=816,611
+AudioAnalyzePeak peakAnalyzer;   // xy=871,489
+AudioRecordQueue recordQueue;    // xy=897,431
+AudioOutputI2S audioOutput;      // xy=1129,606
 AudioConnection patchCord1(micIn, 0, recordQueue, 0);
 AudioConnection patchCord2(micIn, 0, peakAnalyzer, 0);
-AudioConnection patchCord3(beepWaveform, 0, audioMixer, 0);
-AudioConnection patchCord4(playSdRaw, 0, audioMixer, 1);
-AudioConnection patchCord5(audioMixer, 0, audioOutput, 0);
-AudioConnection patchCord6(audioMixer, 0, audioOutput, 1);
-AudioControlSGTL5000 sgtl5000; // xy=214.3333282470703,597.3333282470703
+AudioConnection patchCord3(playSdWav, 0, audioMixer, 1);
+AudioConnection patchCord4(playSdWav, 1, audioMixer, 2);
+AudioConnection patchCord5(beepWaveform, 0, audioMixer, 0);
+AudioConnection patchCord6(audioMixer, 0, audioOutput, 0);
+AudioConnection patchCord7(audioMixer, 0, audioOutput, 1);
+AudioControlSGTL5000 sgtl5000; // xy=188,400
 // GUItool: end automatically generated code
 
 // Use these with the Teensy Audio Shield
 #define SDCARD_CS_PIN 10
-#define SDCARD_MOSI_PIN 7
-#define SDCARD_SCK_PIN 14
+#define SDCARD_MOSI_PIN 11
+#define SDCARD_SCK_PIN 13
 #define HOOK_PIN 0
 #define RECORD_PIN 4
 
@@ -45,6 +46,42 @@ enum Mode
   Recording
 };
 Mode mode = Mode::Initialising;
+
+void printMode()
+{ // only for debugging
+  Serial.print("Mode switched to: ");
+  switch (mode)
+  {
+  case Mode::Initialising:
+    Serial.println(" Initialising");
+    break;
+  case Mode::Prompting:
+    Serial.println(" Prompting");
+    break;
+  case Mode::Ready:
+    Serial.println(" Ready");
+    break;
+  case Mode::Recording:
+    Serial.println(" Recording");
+    break;
+  }
+}
+
+void setMode(Mode newMode)
+{
+  mode = newMode;
+  printMode();
+}
+
+void wait(unsigned int milliseconds)
+{
+  delayMicroseconds(100);
+  elapsedMillis msec = 0;
+
+  while (msec <= milliseconds)
+  {
+  }
+}
 
 /* #region Recording */
 
@@ -152,8 +189,6 @@ void setup()
 
   pinMode(RECORD_PIN, INPUT_PULLDOWN);
 
-  setMode(Mode::Ready);
-
   // Audio connections require memory to work.  For more
   // detailed information, see the MemoryAndCpuUsage example
   AudioMemory(8);
@@ -177,23 +212,51 @@ void setup()
       delay(500);
     }
   }
+
+  setMode(Mode::Ready);
 }
 
 // elapsedMillis fps;
 void loop()
 {
+
   buttonRecord.update();
   switch (mode)
   {
+  case Mode::Prompting:
+    // wait for handset to be picked up
+    wait(1000);
+    // delay(100);
+    playSdWav.play("greeting.wav");
+    while (playSdWav.isPlaying())
+    {
+      buttonRecord.update();
+      if (buttonRecord.fallingEdge())
+      {
+        playSdWav.stop();
+        setMode(Mode::Ready);
+        return;
+      }
+    }
+
+    beepWaveform.begin(0.04f, 440, WAVEFORM_SINE);
+    wait(1250);
+    beepWaveform.amplitude(0);
+
+    Serial.println("Done prompting...");
+
+    // setMode(Mode::Ready);
+    startRecording();
   case Mode::Ready:
     if (buttonRecord.risingEdge())
     {
-      startRecording();
+      // startRecording();
+      setMode(Mode::Prompting);
     }
     break;
   case Mode::Recording:
     // Handset is replaced
-    if (buttonRecord.risingEdge())
+    if (buttonRecord.fallingEdge())
     {
       stopRecording();
       return;
@@ -204,29 +267,6 @@ void loop()
 
     //
   default:
-    break;
-  }
-}
-
-void setMode(Mode newMode)
-{
-  mode = newMode;
-  printMode();
-}
-
-void printMode()
-{ // only for debugging
-  Serial.print("Mode switched to: ");
-  switch (mode)
-  {
-  case Mode::Initialising:
-    Serial.println(" Initialising");
-    break;
-  case Mode::Ready:
-    Serial.println(" Ready");
-    break;
-  case Mode::Recording:
-    Serial.println(" Recording");
     break;
   }
 }
