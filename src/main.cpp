@@ -225,7 +225,7 @@ void loop()
   {
   case Mode::Prompting:
     // wait for handset to be picked up
-    wait(1000);
+    wait(1500);
     // delay(100);
     playSdWav.play("greeting.wav");
     while (playSdWav.isPlaying())
@@ -238,8 +238,10 @@ void loop()
         return;
       }
     }
+    
+    wait(500);
 
-    beepWaveform.begin(0.04f, 440, WAVEFORM_SINE);
+    beepWaveform.begin(0.1f, 825, WAVEFORM_SINE);
     wait(1250);
     beepWaveform.amplitude(0);
 
