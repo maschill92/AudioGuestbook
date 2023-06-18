@@ -31,7 +31,7 @@ AudioControlSGTL5000 sgtl5000; // xy=188,400
 #define HOOK_PIN 0
 #define RECORD_PIN 4
 
-Bounce buttonRecord = Bounce(RECORD_PIN, 150);
+Bounce buttonRecord = Bounce(RECORD_PIN, 50);
 
 // Filename to save audio recording on SD card
 char filename[15];
@@ -42,7 +42,11 @@ enum Mode
 {
   Initialising,
   Ready,
+  PrePromptDelay,
+  BeginPrompt,
   Prompting,
+  PreBeepDelay,
+  Beep,
   Recording
 };
 Mode mode = Mode::Initialising;
@@ -64,6 +68,18 @@ void printMode()
   case Mode::Recording:
     Serial.println(" Recording");
     break;
+  case Mode::Beep:
+    Serial.println(" Beep");
+    break;
+  case Mode::PreBeepDelay:
+    Serial.println(" PreBeepDelay");
+    break;
+  case Mode::PrePromptDelay:
+    Serial.println(" PrePromptDelay");
+    break;
+  case Mode::BeginPrompt:
+    Serial.println(" BeginPrompt");
+    break;
   }
 }
 
@@ -75,7 +91,6 @@ void setMode(Mode newMode)
 
 void wait(unsigned int milliseconds)
 {
-  delayMicroseconds(100);
   elapsedMillis msec = 0;
 
   while (msec <= milliseconds)
@@ -110,6 +125,7 @@ void startRecording()
     Serial.print("Couldn't open file ");
     Serial.print(filename);
     Serial.println("to record!");
+    // move to constant error tone?
   }
 }
 
@@ -216,44 +232,105 @@ void setup()
   setMode(Mode::Ready);
 }
 
-// elapsedMillis fps;
+elapsedMillis timer = 0;
 void loop()
 {
 
   buttonRecord.update();
   switch (mode)
   {
-  case Mode::Prompting:
-    // wait for handset to be picked up
-    wait(1500);
-    // delay(100);
-    playSdWav.play("greeting.wav");
-    while (playSdWav.isPlaying())
-    {
-      buttonRecord.update();
-      if (buttonRecord.fallingEdge())
-      {
-        playSdWav.stop();
-        setMode(Mode::Ready);
-        return;
-      }
-    }
-    
-    wait(500);
-
-    beepWaveform.begin(0.1f, 825, WAVEFORM_SINE);
-    wait(1250);
-    beepWaveform.amplitude(0);
-
-    Serial.println("Done prompting...");
-
-    // setMode(Mode::Ready);
-    startRecording();
   case Mode::Ready:
     if (buttonRecord.risingEdge())
     {
       // startRecording();
+      timer = 0;
+      setMode(Mode::PrePromptDelay);
+    }
+    break;
+  case Mode::PrePromptDelay:
+    if (buttonRecord.fallingEdge())
+    {
+      timer = 0;
+      setMode(Mode::Ready);
+      return;
+    }
+
+    // wait for user to lift handset to ear...
+    if (timer >= 1500)
+    {
+      // handset as been up for a time, begin the greeting and set to prompting.
+      timer = 0;
+      playSdWav.play("greeting.wav");
+      setMode(Mode::BeginPrompt);
+      return;
+    }
+
+    break;
+  case Mode::BeginPrompt:
+    if (buttonRecord.fallingEdge())
+    {
+      timer = 0;
+      playSdWav.stop();
+      setMode(Mode::Ready);
+      return;
+    }
+    if (timer >=100) {
+      timer = 0;
       setMode(Mode::Prompting);
+      return;
+    }
+    break;
+  case Mode::Prompting:
+    // if hang up, stop greeting, go back to read
+    if (buttonRecord.fallingEdge())
+    {
+      playSdWav.stop();
+      setMode(Mode::Ready);
+      return;
+    }
+    if (playSdWav.isPlaying())
+    {
+      // still playing. do nothing.
+      return;
+    }
+    // should .stop be called?
+    // playSdWav.stop();
+
+    timer = 0;
+    setMode(Mode::PreBeepDelay);
+    break;
+
+  case Mode::PreBeepDelay:
+    if (buttonRecord.fallingEdge())
+    {
+      timer = 0;
+      setMode(Mode::Ready);
+      return;
+    }
+    if (timer >= 500)
+    {
+      // delay before beep has elasped
+      beepWaveform.begin(0.1f, 825, WAVEFORM_SINE);
+      timer = 0;
+      setMode(Mode::Beep);
+      return;
+    }
+    break;
+  case Mode::Beep:
+    if (buttonRecord.fallingEdge())
+    {
+      beepWaveform.amplitude(0);
+      timer = 0;
+      setMode(Mode::Ready);
+      return;
+    }
+    if (timer >= 1250)
+    {
+      // beep has been playing for some time, stop it.
+      beepWaveform.amplitude(0);
+      timer = 0;
+      startRecording();
+      return;
     }
     break;
   case Mode::Recording:
