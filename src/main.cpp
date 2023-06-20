@@ -213,7 +213,7 @@ void setup()
   // This may wait forever if the SDA & SCL pins lack
   // pullup resistors
   sgtl5000.enable();
-  sgtl5000.volume(0.4);
+  sgtl5000.volume(0.6);
   sgtl5000.inputSelect(AUDIO_INPUT_MIC);
   sgtl5000.micGain(0);
 
