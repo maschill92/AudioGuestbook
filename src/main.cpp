@@ -1,37 +1,54 @@
+#include <Arduino.h>
+#include <Bounce.h>
 #include <Audio.h>
 #include <Wire.h>
 #include <SPI.h>
 #include <SD.h>
-#include <SerialFlash.h>
-#include <Bounce.h>
 #include <TimeLib.h>
 
 // GUItool: begin automatically generated code
-AudioPlaySdWav playSdWav1; // xy=331,330
-AudioOutputI2S i2s1;       // xy=876,337
-AudioConnection patchCord1(playSdWav1, 0, i2s1, 0);
-AudioConnection patchCord2(playSdWav1, 1, i2s1, 1);
-AudioControlSGTL5000 sgtl5000_1; // xy=318,428
+AudioInputI2S micIn;             // xy=452,452
+AudioPlaySdWav playSdWav;        // xy=605,632
+AudioSynthWaveform beepWaveform; // xy=611,590
+AudioMixer4 audioMixer;          // xy=816,611
+AudioAnalyzePeak peakAnalyzer;   // xy=871,489
+AudioRecordQueue recordQueue;    // xy=897,431
+AudioOutputI2S audioOutput;      // xy=1129,606
+AudioConnection patchCord1(micIn, 0, recordQueue, 0);
+AudioConnection patchCord2(micIn, 0, peakAnalyzer, 0);
+AudioConnection patchCord3(playSdWav, 0, audioMixer, 1);
+AudioConnection patchCord4(playSdWav, 1, audioMixer, 2);
+AudioConnection patchCord5(beepWaveform, 0, audioMixer, 0);
+AudioConnection patchCord6(audioMixer, 0, audioOutput, 0);
+AudioConnection patchCord7(audioMixer, 0, audioOutput, 1);
+AudioControlSGTL5000 sgtl5000; // xy=188,400
 // GUItool: end automatically generated code
 
 // Use these with the Teensy Audio Shield
 #define SDCARD_CS_PIN 10
-#define SDCARD_MOSI_PIN 7
-#define SDCARD_SCK_PIN 14
+#define SDCARD_MOSI_PIN 11
+#define SDCARD_SCK_PIN 13
 #define HOOK_PIN 0
 #define RECORD_PIN 4
 
-Bounce buttonHook = Bounce(HOOK_PIN, 350);
-Bounce buttonRecord = Bounce(RECORD_PIN, 150);
+Bounce buttonRecord = Bounce(RECORD_PIN, 50);
+
+// Filename to save audio recording on SD card
+char filename[15];
+// The file object itself
+File frec;
 
 enum Mode
 {
   Initialising,
   Ready,
-  Playing,
+  PrePromptDelay,
+  BeginPrompt,
+  Prompting,
+  PreBeepDelay,
+  Beep,
   Recording
 };
-
 Mode mode = Mode::Initialising;
 
 void printMode()
@@ -42,28 +59,151 @@ void printMode()
   case Mode::Initialising:
     Serial.println(" Initialising");
     break;
+  case Mode::Prompting:
+    Serial.println(" Prompting");
+    break;
   case Mode::Ready:
     Serial.println(" Ready");
-    break;
-  case Mode::Playing:
-    Serial.println(" Playing");
     break;
   case Mode::Recording:
     Serial.println(" Recording");
     break;
-  default:
-    Serial.println(" Undefined");
+  case Mode::Beep:
+    Serial.println(" Beep");
+    break;
+  case Mode::PreBeepDelay:
+    Serial.println(" PreBeepDelay");
+    break;
+  case Mode::PrePromptDelay:
+    Serial.println(" PrePromptDelay");
+    break;
+  case Mode::BeginPrompt:
+    Serial.println(" BeginPrompt");
     break;
   }
 }
 
+void setMode(Mode newMode)
+{
+  mode = newMode;
+  printMode();
+}
+
+void wait(unsigned int milliseconds)
+{
+  elapsedMillis msec = 0;
+
+  while (msec <= milliseconds)
+  {
+  }
+}
+
+/* #region Recording */
+
+void startRecording()
+{
+  for (uint16_t i = 0; i < 9999; i++)
+  {
+    // Format the counter as a five-digit number with leading zeroes, followed by file extension
+    snprintf(filename, 11, " %05d.pcm", i);
+    // Create if does not exist, do not open existing, write, sync after write
+    if (!SD.exists(filename))
+    {
+      break;
+    }
+  }
+  frec = SD.open(filename, FILE_WRITE);
+  if (frec)
+  {
+    Serial.print("Recording to ");
+    Serial.println(filename);
+    recordQueue.begin();
+    setMode(Mode::Recording);
+  }
+  else
+  {
+    Serial.print("Couldn't open file ");
+    Serial.print(filename);
+    Serial.println("to record!");
+    // move to constant error tone?
+  }
+}
+
+elapsedMillis fps;
+void continueRecording()
+{
+
+  if (fps > 100)
+  {
+    if (peakAnalyzer.available())
+    {
+      fps = 0;
+      int monoPeak = peakAnalyzer.read() * 30.0;
+      Serial.print("|");
+      for (int cnt = 0; cnt < monoPeak; cnt++)
+      {
+        Serial.print(">");
+      }
+      Serial.println();
+    }
+  }
+
+  if (recordQueue.available() >= 2)
+  {
+    byte buffer[512];
+    // Fetch 2 blocks from the audio library and copy
+    // into a 512 byte buffer.  The Arduino SD library
+    // is most efficient when full 512 byte sector size
+    // writes are used.
+    memcpy(buffer, recordQueue.readBuffer(), 256);
+    recordQueue.freeBuffer();
+    memcpy(buffer + 256, recordQueue.readBuffer(), 256);
+    recordQueue.freeBuffer();
+    // elapsedMicros usec = 0;
+    // write all 512 bytes to the SD card
+    frec.write(buffer, 512);
+    // Uncomment these lines to see how long SD writes
+    // are taking.  A pair of audio blocks arrives every
+    // 5802 microseconds, so hopefully most of the writes
+    // take well under 5802 us.  Some will take more, as
+    // the SD library also must write to the FAT tables
+    // and the SD card controller manages media erase and
+    // wear leveling.  The recordQueue object can buffer
+    // approximately 301700 us of audio, to allow time
+    // for occasional high SD card latency, as long as
+    // the average write time is under 5802 us.
+    // Serial.print("SD write, us=");
+    // Serial.println(usec);
+  }
+}
+
+/**
+ * 1. End recording
+ * 2. Consume remainder of data in record queue
+ * 3. Close file
+ */
+void stopRecording()
+{
+  recordQueue.end();
+  // consume what's left in the record queue and write that to the file
+  while (recordQueue.available() > 0)
+  {
+    frec.write((byte *)recordQueue.readBuffer(), 256);
+    recordQueue.freeBuffer();
+  }
+  // close the file and make things ready again
+  frec.close();
+  Serial.printf("Saving file %s\n", filename);
+  setMode(Mode::Ready);
+}
+
+/* #endregion Recording */
+
 void setup()
 {
   Serial.begin(9600);
-  pinMode(HOOK_PIN, INPUT_PULLUP);
-  pinMode(RECORD_PIN, INPUT);
-  mode = Mode::Ready;
-  printMode();
+
+  pinMode(RECORD_PIN, INPUT_PULLDOWN);
 
   // Audio connections require memory to work.  For more
   // detailed information, see the MemoryAndCpuUsage example
@@ -72,8 +212,10 @@ void setup()
   // Comment these out if not using the audio adaptor board.
   // This may wait forever if the SDA & SCL pins lack
   // pullup resistors
-  sgtl5000_1.enable();
-  sgtl5000_1.volume(0.4);
+  sgtl5000.enable();
+  sgtl5000.volume(0.6);
+  sgtl5000.inputSelect(AUDIO_INPUT_MIC);
+  sgtl5000.micGain(0);
 
   SPI.setMOSI(SDCARD_MOSI_PIN);
   SPI.setSCK(SDCARD_SCK_PIN);
@@ -86,71 +228,124 @@ void setup()
       delay(500);
     }
   }
+
+  setMode(Mode::Ready);
 }
 
+elapsedMillis timer = 0;
 void loop()
 {
-  buttonHook.update();
+
   buttonRecord.update();
-  if (buttonRecord.risingEdge())
+  switch (mode)
   {
-    Serial.println("start recording!");
-  }
+  case Mode::Ready:
+    if (buttonRecord.risingEdge())
+    {
+      // startRecording();
+      timer = 0;
+      setMode(Mode::PrePromptDelay);
+    }
+    break;
+  case Mode::PrePromptDelay:
+    if (buttonRecord.fallingEdge())
+    {
+      timer = 0;
+      setMode(Mode::Ready);
+      return;
+    }
 
-  if (buttonHook.risingEdge())
-  {
-    // rising edge is "lowering" the phone
-    Serial.println("phone replaced!");
-  }
-  else if (buttonHook.fallingEdge())
-  {
-    // hook falling edge is "enabled"
-    Serial.println("phone lifted!");
-  }
-  // switch (mode)
-  // {
-  // case Mode::Ready:
-  //   if (buttonHook.fallingEdge())
-  //   {
-  //     mode = Mode::Playing;
-  //     printMode();
-  //   }
-  //   else if (buttonRecord.risingEdge())
-  //   {
-  //     mode = Mode::Recording;
-  //     printMode();
-  //   }
-  //   break;
-  // case Mode::Playing:
-  //   delay(1000);
-  //   playSdWav1.play("absolute-power.wav");
-  //   while (!playSdWav1.isStopped())
-  //   {
-  //     // Check whether the handset is replaced
-  //     buttonHook.update();
-  //     // Handset is replaced
-  //     if (buttonHook.risingEdge())
-  //     {
-  //       playSdWav1.stop();
-  //       mode = Mode::Ready;
-  //       printMode();
-  //       return;
-  //     }
+    // wait for user to lift handset to ear...
+    if (timer >= 1500)
+    {
+      // handset as been up for a time, begin the greeting and set to prompting.
+      timer = 0;
+      playSdWav.play("greeting.wav");
+      setMode(Mode::BeginPrompt);
+      return;
+    }
 
-  //     // Check whether the record button is pressed
-  //     buttonRecord.update();
-  //     if (buttonRecord.fallingEdge())
-  //     {
-  //       mode = Mode::Recording;
-  //       printMode();
-  //       return;
-  //     }
-  //   }
-  //   break;
-  // case Mode::Recording:
-  //   delay(1000);
-  //   mode = Mode::Ready;
-  //   printMode();
-  //   break;
-  // }
+    break;
+  case Mode::BeginPrompt:
+    if (buttonRecord.fallingEdge())
+    {
+      timer = 0;
+      playSdWav.stop();
+      setMode(Mode::Ready);
+      return;
+    }
+    if (timer >=100) {
+      timer = 0;
+      setMode(Mode::Prompting);
+      return;
+    }
+    break;
+  case Mode::Prompting:
+    // if hang up, stop greeting, go back to read
+    if (buttonRecord.fallingEdge())
+    {
+      playSdWav.stop();
+      setMode(Mode::Ready);
+      return;
+    }
+    if (playSdWav.isPlaying())
+    {
+      // still playing. do nothing.
+      return;
+    }
+    // should .stop be called?
+    // playSdWav.stop();
+
+    timer = 0;
+    setMode(Mode::PreBeepDelay);
+    break;
+
+  case Mode::PreBeepDelay:
+    if (buttonRecord.fallingEdge())
+    {
+      timer = 0;
+      setMode(Mode::Ready);
+      return;
+    }
+    if (timer >= 500)
+    {
+      // delay before beep has elasped
+      beepWaveform.begin(0.1f, 825, WAVEFORM_SINE);
+      timer = 0;
+      setMode(Mode::Beep);
+      return;
+    }
+    break;
+  case Mode::Beep:
+    if (buttonRecord.fallingEdge())
+    {
+      beepWaveform.amplitude(0);
+      timer = 0;
+      setMode(Mode::Ready);
+      return;
+    }
+    if (timer >= 1250)
+    {
+      // beep has been playing for some time, stop it.
+      beepWaveform.amplitude(0);
+      timer = 0;
+      startRecording();
+      return;
+    }
+    break;
+  case Mode::Recording:
+    // Handset is replaced
+    if (buttonRecord.fallingEdge())
+    {
+      stopRecording();
+      return;
+    }
+
+    continueRecording();
+    break;
+
+    //
+  default:
+    break;
+  }
 }
